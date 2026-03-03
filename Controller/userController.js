@@ -2,17 +2,17 @@ const userService = require("../Services/userService");
 
 async function getUser(req, res) {
     try {
-        const users = await userService.getUsers();
-        const userId = parseInt(req.query.UserID);
+        const userId = req.query.UserID;
         
         if (userId) {
-            const user = users.find(user => user.UserID === userId);
-            if (user) {
-                res.json(user);
+            const details = await userService.GetUserDetails(userId);
+            if (details && details.length > 0) {
+                res.json(details[0]);
             } else {
                 res.status(404).json({ error: "User not found" });
             }
         } else {
+            const users = await userService.getUsers();
             res.json(users);
         }
     } catch (err) {
@@ -51,7 +51,7 @@ async function AuthenticateUser(req, res) {
 async function GetUserDetails(req, res) {
     try {
        
-        const UserID = parseInt(req.query.UserID);
+        const UserID = req.query.UserID;
         const user = await userService.GetUserDetails(UserID);
         if (user) {
             res.json(user);

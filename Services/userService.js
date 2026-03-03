@@ -13,10 +13,10 @@ async function saveUser(user) {
 
   const { UserName, Email, Password, Role, ImageURL, IsActive } = user;
 
-  const existing = await User.findOne({ Email }).lean();
+  const existing = await User.findOne({ Email }).select("_id").lean();
   if (existing) {
     const resp = new SaveResponse();
-    resp.ID = existing.UserID;
+    resp.ID = existing._id.toString();
     resp.Status = "exists";
     resp.Saved = false;
     return resp;
@@ -44,14 +44,16 @@ async function AuthenticateUser(user) {
 
   const { Email, Password, Role } = user;
 
-  const found = await User.findOne({ Email, Password, Role }).lean();
+  const found = await User.findOne({ Email, Password, Role })
+    .select("_id")
+    .lean();
 
   const resp = new SaveResponse();
 
   if (found) {
     resp.Status = "success";
     resp.Saved = true;
-    resp.ID = found.UserID;
+    resp.ID = found._id.toString();
   } else {
     resp.Status = "failed";
     resp.Saved = false;
@@ -63,8 +65,15 @@ async function AuthenticateUser(user) {
 async function GetUserDetails(UserID) {
   await connectDb();
 
-  const user = await User.findById(UserID).lean();
-  return user ? [user] : [];
+  const user = await User.findById(UserID).select("-Password").lean();
+  if (!user) return [];
+
+  return [
+    {
+      ...user,
+      UserID: user._id.toString(),
+    },
+  ];
 }
 
 async function DeleteUser(UserID) {
