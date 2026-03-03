@@ -1,123 +1,84 @@
-const sql = require('mssql');
-const dbConfig = require("../dbConfig");
+const connectDb = require("../dbConfig");
 const SaveResponse = require("../Shared/SaveResponse");
+const User = require("../Models/User");
 
 async function getUsers() {
-    try {
-        await sql.connect(dbConfig);
-        const result = await sql.query("SELECT * FROM Users_NotDeleted");
-        return result.recordset;
-    } catch (err) {
-        throw new Error(err.message);
-    }
+  await connectDb();
+  const users = await User.find({ IsActive: true }).lean();
+  return users;
 }
 
 async function saveUser(user) {
-    try {
-        
-        const { UserName, UserID, Email, Password, ConfirmPassword, Role,ImageURL, IsActive } = user;
-        await sql.connect(dbConfig);
+  await connectDb();
 
-         // Prepare the request for the stored procedure
-         const request = new sql.Request();
-        const Response ='';
-         // Add parameters to the request
-         request.input('UserName', sql.NVarChar, UserName);
-         request.input('UserID', sql.Int, UserID);
-         request.input('Email', sql.NVarChar, Email);
-         request.input('Password', sql.NVarChar, Password);
-         request.input('ImageURL', sql.NVarChar, ImageURL);
-         request.input('Role', sql.Int, Role);
-         request.input('IsActive', sql.Bit, IsActive);
-         request.output('Response',sql.NVarChar,Response);
- 
-         // Execute the stored procedure
-         const result = await request.execute('SaveUser');
+  const { UserName, Email, Password, Role, ImageURL, IsActive } = user;
 
-         const Resp = new SaveResponse();
-         Resp.ID =result.output.Response;
-         Resp.Status ='success';
-         Resp.Saved =true;
-         // Return the result from the stored procedure
-         console.log(Resp);
-         
-         return Resp;
-    } catch (err) {
-        throw new Error(err.message);
-    }
+  const existing = await User.findOne({ Email }).lean();
+  if (existing) {
+    const resp = new SaveResponse();
+    resp.ID = existing.UserID;
+    resp.Status = "exists";
+    resp.Saved = false;
+    return resp;
+  }
+
+  const created = await User.create({
+    UserName,
+    Email,
+    Password,
+    Role,
+    ImageURL,
+    IsActive,
+  });
+
+  const resp = new SaveResponse();
+  resp.ID = created.UserID;
+  resp.Status = "success";
+  resp.Saved = true;
+
+  return resp;
 }
 
-
 async function AuthenticateUser(user) {
-    try {
-        
-        const {  Email, Password , Role} = user;
+  await connectDb();
 
-        await sql.connect(dbConfig);
+  const { Email, Password, Role } = user;
 
-        const request = new sql.Request();
-        
-        request.input('Email', sql.NVarChar, Email);
-        request.input('Password', sql.NVarChar, Password);
-        request.input('Role', sql.Int, Role);
-        const Response ='';
-        request.output('Response',sql.NVarChar,Response);
- 
-        const result = await request.execute('AuthenticateUser');
+  const found = await User.findOne({ Email, Password, Role }).lean();
 
-        const Resp = new SaveResponse();
+  const resp = new SaveResponse();
 
-        if(result.recordset.length>0){
-            Resp.Status ='success';
-            Resp.Saved =true;
-            Resp.ID =result.output.Response;
-        }else{
-            Resp.Status ='failed';
-            Resp.Saved =false;
-        }
+  if (found) {
+    resp.Status = "success";
+    resp.Saved = true;
+    resp.ID = found.UserID;
+  } else {
+    resp.Status = "failed";
+    resp.Saved = false;
+  }
 
-        console.log(Resp);
-         
-        return Resp;
-
-    } catch (err) {
-        throw new Error(err.message);
-    }
+  return resp;
 }
 
 async function GetUserDetails(UserID) {
-    try {
-        await sql.connect(dbConfig);
-        const request = new sql.Request();
-        request.input('UserID', sql.Int, UserID);
-        console.log(UserID);
-       
-        const result = await request.execute("GetUserDetails");
-        return result.recordset;
-    } catch (err) {
-        throw new Error(err.message);
-    }
-}
+  await connectDb();
 
+  const user = await User.findById(UserID).lean();
+  return user ? [user] : [];
+}
 
 async function DeleteUser(UserID) {
-    try {
-        await sql.connect(dbConfig);
-        const request = new sql.Request();
+  await connectDb();
 
-        request.input('UserID', sql.Int, UserID);
-const Response ='';
-        request.output('Response',sql.NVarChar,Response);
-        const result = await request.execute("DeleteUser");
-return result.output.Response;
-         
-    } catch (err) {
-       
-        throw new Error(err.message);
-    }
+  const result = await User.findByIdAndDelete(UserID);
+  return result ? UserID : null;
 }
 
-
 module.exports = {
-    getUsers, saveUser, AuthenticateUser ,GetUserDetails,DeleteUser
+  getUsers,
+  saveUser,
+  AuthenticateUser,
+  GetUserDetails,
+  DeleteUser,
 };
+

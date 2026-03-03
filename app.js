@@ -1,9 +1,10 @@
 // app.js
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const userRoutes = require("./Routes/userRoutes");
-const productRoutes = require("./Routes/productRoutes");
-const RegistrationRoutes = require("./Routes/RegistrationRoutes");
+const chatRoutes = require("./Routes/chatRoutes");
+const connectDb = require("./dbConfig");
 const bodyParser = require('body-parser');
 
 const app = express();
@@ -17,10 +18,15 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 app.use("/", userRoutes);
-app.use("/", productRoutes);
-app.use("/",RegistrationRoutes)
+app.use("/", chatRoutes);
 
-
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+connectDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Failed to connect to MongoDB:", err);
+    process.exit(1);
+  });

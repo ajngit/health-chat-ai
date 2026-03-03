@@ -1,47 +1,16 @@
-const sql = require('mssql');
+const mongoose = require("mongoose");
 
-//azure config
+const MONGODB_URI =
+  process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/health_chat_db";
 
-const config = {
-  user: 'techhub',
-  password: 'TXih@GCML9YzG4V',
-  server: 'techhub.database.windows.net',
-  database: 'harvesthub',
-  port: 1433,
-  encrypt: true, // Always use encrypt for cloud deployments
-  trustServerCertificate: true, // Skip certificate validation (optional)
-  
+async function connectDb() {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
 
-};
+  await mongoose.connect(MONGODB_URI, {
+    dbName: undefined,
+  });
+}
 
-//cloud cluster config
-
-
-// const config = {
-//   user: 'admin',
-//   password: 'Adm!n001',
-//   server: 'mssql-191972-0.cloudclusters.net',
-//   database: 'HarvestHub',
-//   port: 10218,
-//   encrypt: true, // Always use encrypt for cloud deployments
-//   trustServerCertificate: true, // Skip certificate validation (optional)
-  
-
-// };
-
-//local config
-
-
-// const config = {
-//   user: 'myuser',
-//   password: 'asd123.',
-//   server: 'localhost', 
-//   database: 'HarvestHub',
-//   options: {
-//     trustServerCertificate: true,
-//   },
-// };
-
-
-
-module.exports = config;
+module.exports = connectDb;
