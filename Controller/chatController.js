@@ -2,7 +2,13 @@ const chatService = require("../Services/chatService");
 
 async function analyzeChat(req, res) {
   try {
-    const { userId, userDetails, messages } = req.body || {};
+    const { sessionId, userId, userDetails, messages } = req.body || {};
+
+    if (!sessionId) {
+      return res
+        .status(400)
+        .json({ error: "sessionId is required" });
+    }
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res
@@ -11,6 +17,7 @@ async function analyzeChat(req, res) {
     }
 
     const result = await chatService.analyzeChat({
+      sessionId,
       userId,
       userDetails,
       messages,

@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const userRoutes = require("./Routes/userRoutes");
 const chatRoutes = require("./Routes/chatRoutes");
+const adminRoutes = require("./Routes/adminRoutes");
 const connectDb = require("./dbConfig");
 const bodyParser = require('body-parser');
 
@@ -19,6 +20,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 app.use("/", userRoutes);
 app.use("/", chatRoutes);
+app.use("/", adminRoutes);
 
 connectDb()
   .then(() => {

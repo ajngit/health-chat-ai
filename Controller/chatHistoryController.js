@@ -9,12 +9,13 @@ async function getChatHistory(req, res) {
 
     const filter = userId ? { userId: String(userId) } : {};
 
-    const items = await ChatAnalysis.find(filter)
+    // Get sessions with full chat history, sorted by most recent first
+    const sessions = await ChatAnalysis.find(filter)
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
 
-    return res.json(items);
+    return res.json(sessions);
   } catch (err) {
     console.error("Error in getChatHistory:", err);
     return res.status(500).json({ error: err.message || "Server error" });

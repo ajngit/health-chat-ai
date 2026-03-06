@@ -10,7 +10,8 @@ const messageSchema = new mongoose.Schema(
 
 const chatAnalysisSchema = new mongoose.Schema(
   {
-    userId: { type: String }, // can be mapped from User.UserID or external ID
+    sessionId: { type: String, required: true, index: true }, // unique session identifier
+    userId: { type: String, index: true }, // can be mapped from User.UserID or external ID
     userDetails: { type: Object },
     messages: { type: [messageSchema], required: true },
     aiResponse: { type: String },

@@ -4,8 +4,11 @@ const User = require("../Models/User");
 
 async function getUsers() {
   await connectDb();
-  const users = await User.find({ IsActive: true }).lean();
-  return users;
+  const users = await User.find({ IsActive: true }).select("-Password").lean();
+  return users.map((u) => ({
+    ...u,
+    UserID: u._id.toString(),
+  }));
 }
 
 async function saveUser(user) {
@@ -22,17 +25,26 @@ async function saveUser(user) {
     return resp;
   }
 
+  // Enforce single-admin rule:
+  // - If an admin already exists, every new user is forced to Role = 0.
+  // - If no admin exists yet, allow Role = 1 only for this first user.
+  const adminExists = await User.exists({ Role: 1 });
+  let roleToSave = 0;
+  if (!adminExists && Role === 1) {
+    roleToSave = 1;
+  }
+
   const created = await User.create({
     UserName,
     Email,
     Password,
-    Role,
+    Role: roleToSave,
     ImageURL,
     IsActive,
   });
 
   const resp = new SaveResponse();
-  resp.ID = created.UserID;
+  resp.ID = created._id.toString();
   resp.Status = "success";
   resp.Saved = true;
 
@@ -42,10 +54,10 @@ async function saveUser(user) {
 async function AuthenticateUser(user) {
   await connectDb();
 
-  const { Email, Password, Role } = user;
+  const { Email, Password } = user;
 
-  const found = await User.findOne({ Email, Password, Role })
-    .select("_id")
+  const found = await User.findOne({ Email, Password })
+    .select("_id Role")
     .lean();
 
   const resp = new SaveResponse();
@@ -54,6 +66,7 @@ async function AuthenticateUser(user) {
     resp.Status = "success";
     resp.Saved = true;
     resp.ID = found._id.toString();
+    resp.Role = found.Role;
   } else {
     resp.Status = "failed";
     resp.Saved = false;

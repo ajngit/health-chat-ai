@@ -3,6 +3,7 @@ class SaveResponse {
         Saved = ''; 
         ID = 0 ;
         Status  ='';
+        Role = 0;
     
 }
 

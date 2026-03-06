@@ -114,7 +114,11 @@ function mapToAnalysis(modelOutput) {
 }
 
 async function analyzeChat(payload) {
-  const { userId, userDetails, messages } = payload;
+  const { sessionId, userId, userDetails, messages } = payload;
+
+  if (!sessionId) {
+    throw new Error("sessionId is required");
+  }
 
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error("messages must be a non-empty array");
@@ -127,17 +131,25 @@ async function analyzeChat(payload) {
 
   const aiResponseText = await generateReply(messages, analysis);
 
-  await ChatAnalysis.create({
-    userId: userId ? String(userId) : undefined,
-    userDetails: userDetails || {},
-    messages,
-    aiResponse: aiResponseText,
-    mentalState: analysis.mentalState,
-    confidence: analysis.confidence,
-    rawModelOutput: analysis.rawModelOutput,
-  });
+  // Find and update existing session or create new one
+  const chatAnalysis = await ChatAnalysis.findOneAndUpdate(
+    { sessionId: String(sessionId) },
+    {
+      $set: {
+        userId: userId ? String(userId) : undefined,
+        userDetails: userDetails || {},
+        messages,
+        aiResponse: aiResponseText,
+        mentalState: analysis.mentalState,
+        confidence: analysis.confidence,
+        rawModelOutput: analysis.rawModelOutput,
+      },
+    },
+    { upsert: true, new: true }
+  );
 
   return {
+    sessionId: chatAnalysis.sessionId,
     aiResponse: aiResponseText,
     analysis,
   };
@@ -146,4 +158,6 @@ async function analyzeChat(payload) {
 module.exports = {
   analyzeChat,
 };
+
+
 
