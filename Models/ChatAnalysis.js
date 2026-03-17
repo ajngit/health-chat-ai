@@ -17,6 +17,9 @@ const chatAnalysisSchema = new mongoose.Schema(
     aiResponse: { type: String },
     mentalState: { type: String },
     confidence: { type: Number },
+    emotionAnalysis: { type: Object },
+    indexes: { type: Object },
+    generationSource: { type: String },
     rawModelOutput: { type: Object },
   },
   { timestamps: true }

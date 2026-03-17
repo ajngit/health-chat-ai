@@ -11,7 +11,7 @@ async function getChatHistory(req, res) {
 
     // Get sessions with full chat history, sorted by most recent first
     const sessions = await ChatAnalysis.find(filter)
-      .sort({ createdAt: -1 })
+      .sort({ updatedAt: -1 })
       .limit(50)
       .lean();
 

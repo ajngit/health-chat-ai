@@ -25,6 +25,65 @@ const TEXT_MODEL_CANDIDATES = [
   "mistralai/Mistral-7B-Instruct-v0.3",
 ];
 
+const EMOTION_KEYWORDS = {
+  sadness: [
+    "sad",
+    "down",
+    "cry",
+    "depressed",
+    "empty",
+    "lonely",
+    "rejected",
+    "heartbroken",
+    "hurt",
+    "grief",
+  ],
+  anxiety: [
+    "anxious",
+    "anxiety",
+    "worried",
+    "panic",
+    "fear",
+    "afraid",
+    "nervous",
+    "stress",
+    "overthinking",
+    "restless",
+  ],
+  anger: ["angry", "mad", "frustrated", "annoyed", "hate", "upset", "furious"],
+  hopelessness: [
+    "hopeless",
+    "worthless",
+    "tired of life",
+    "give up",
+    "can't do this",
+    "done with everything",
+  ],
+  guilt: ["guilty", "my fault", "blame myself", "ashamed", "embarrassed", "regret"],
+  overwhelm: [
+    "overwhelmed",
+    "too much",
+    "exhausted",
+    "burned out",
+    "drained",
+    "pressure",
+  ],
+  relief: ["better", "relieved", "calm", "okay now", "peaceful", "lighter"],
+  hope: ["hope", "improving", "healing", "trying", "recover", "stronger"],
+};
+
+const RISK_PATTERNS = [
+  "suicide",
+  "kill myself",
+  "end my life",
+  "don't want to live",
+  "self harm",
+  "hurt myself",
+];
+
+const MAX_CLASSIFIER_CHARS = 1200;
+const MAX_CLASSIFIER_MESSAGES = 6;
+
 function uniqueModels(models) {
   return [...new Set((models || []).filter(Boolean))];
 }
@@ -49,6 +108,14 @@ function normalizeMentalState(label) {
   return normalized;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function roundScore(value) {
+  return Math.round(clamp(value, 0, 1) * 100);
+}
+
 function getLastUserMessage(messages) {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i] && messages[i].role === "user") {
@@ -56,6 +123,27 @@ function getLastUserMessage(messages) {
     }
   }
   return "";
+}
+
+function getUserText(messages) {
+  return (messages || [])
+    .filter((message) => message && message.role === "user" && message.content)
+    .map((message) => message.content)
+    .join(" ");
+}
+
+function buildClassifierInput(messages) {
+  const recentMessages = (messages || []).slice(-MAX_CLASSIFIER_MESSAGES);
+  const inputText = recentMessages
+    .map((message) => `${message.role || "user"}: ${message.content || ""}`)
+    .join("\n")
+    .trim();
+
+  if (inputText.length <= MAX_CLASSIFIER_CHARS) {
+    return inputText;
+  }
+
+  return inputText.slice(inputText.length - MAX_CLASSIFIER_CHARS);
 }
 
 function getLastAssistantMessage(messages) {
@@ -81,7 +169,121 @@ function avoidExactRepeat(candidate, previousAssistantMessage) {
   return candidate;
 }
 
-function buildFallbackReply(messages, analysis) {
+function scoreEmotionFromText(text, keywords, baseScore = 0.06, perHit = 0.18) {
+  const lowerText = text.toLowerCase();
+  const hits = keywords.reduce((count, keyword) => {
+    return count + (lowerText.includes(keyword) ? 1 : 0);
+  }, 0);
+
+  return clamp(baseScore + hits * perHit, 0, 1);
+}
+
+function deriveEmotionAnalysis(messages, sentimentAnalysis) {
+  const text = getUserText(messages);
+  const primarySentiment = sentimentAnalysis.mentalState;
+  const sentimentConfidence = sentimentAnalysis.confidence || 0;
+
+  const emotionScores = Object.entries(EMOTION_KEYWORDS).map(([emotion, keywords]) => {
+    let score = scoreEmotionFromText(text, keywords);
+
+    if (
+      primarySentiment === "negative" &&
+      ["sadness", "anxiety", "anger", "hopelessness", "guilt", "overwhelm"].includes(emotion)
+    ) {
+      score = clamp(score + sentimentConfidence * 0.18, 0, 1);
+    }
+
+    if (
+      primarySentiment === "positive" &&
+      ["relief", "hope"].includes(emotion)
+    ) {
+      score = clamp(score + sentimentConfidence * 0.2, 0, 1);
+    }
+
+    if (primarySentiment === "neutral" && emotion === "overwhelm") {
+      score = clamp(score * 0.8, 0, 1);
+    }
+
+    return {
+      emotion,
+      score: roundScore(score),
+    };
+  });
+
+  emotionScores.sort((a, b) => b.score - a.score);
+  const dominantEmotion = emotionScores[0]?.emotion || "unclear";
+
+  return {
+    dominantEmotion,
+    emotions: emotionScores.filter((entry) => entry.score >= 8).slice(0, 4),
+  };
+}
+
+function deriveIndexes(messages, sentimentAnalysis, emotionAnalysis) {
+  const text = getUserText(messages).toLowerCase();
+  const negativeBias = sentimentAnalysis.mentalState === "negative"
+    ? sentimentAnalysis.confidence * 100
+    : 0;
+  const positiveBias = sentimentAnalysis.mentalState === "positive"
+    ? sentimentAnalysis.confidence * 100
+    : 0;
+  const sadnessScore =
+    emotionAnalysis.emotions.find((entry) => entry.emotion === "sadness")?.score || 0;
+  const anxietyScore =
+    emotionAnalysis.emotions.find((entry) => entry.emotion === "anxiety")?.score || 0;
+  const hopelessnessScore =
+    emotionAnalysis.emotions.find((entry) => entry.emotion === "hopelessness")?.score || 0;
+  const hopeScore =
+    emotionAnalysis.emotions.find((entry) => entry.emotion === "hope")?.score || 0;
+  const reliefScore =
+    emotionAnalysis.emotions.find((entry) => entry.emotion === "relief")?.score || 0;
+  const riskHits = RISK_PATTERNS.reduce((count, phrase) => count + (text.includes(phrase) ? 1 : 0), 0);
+
+  const distressIndex = clamp(
+    Math.round(negativeBias * 0.5 + sadnessScore * 0.25 + anxietyScore * 0.25),
+    0,
+    100
+  );
+  const supportNeedIndex = clamp(
+    Math.round(distressIndex * 0.55 + hopelessnessScore * 0.3 + riskHits * 18),
+    0,
+    100
+  );
+  const resilienceIndex = clamp(
+    Math.round(25 + positiveBias * 0.45 + hopeScore * 0.35 + reliefScore * 0.2 - distressIndex * 0.15),
+    0,
+    100
+  );
+  const riskIndex = clamp(
+    Math.round(hopelessnessScore * 0.4 + distressIndex * 0.25 + supportNeedIndex * 0.2 + riskHits * 25),
+    0,
+    100
+  );
+
+  return {
+    distressIndex,
+    supportNeedIndex,
+    resilienceIndex,
+    riskIndex,
+  };
+}
+
+function buildAnalysisSummary(sentimentAnalysis, emotionAnalysis, indexes) {
+  const emotionPart = emotionAnalysis.emotions.length
+    ? emotionAnalysis.emotions
+        .map((entry) => `${entry.emotion} ${entry.score}/100`)
+        .join(", ")
+    : "no strong emotion signal";
+
+  return [
+    `Mental State: ${sentimentAnalysis.mentalState} (${roundScore(sentimentAnalysis.confidence)}/100)`,
+    `Dominant Emotion: ${emotionAnalysis.dominantEmotion}`,
+    `Emotion Scores: ${emotionPart}`,
+    `Indexes: distress ${indexes.distressIndex}/100, support need ${indexes.supportNeedIndex}/100, resilience ${indexes.resilienceIndex}/100, risk ${indexes.riskIndex}/100`,
+  ].join("\n");
+}
+
+function buildFallbackReply(messages, sentimentAnalysis, emotionAnalysis, indexes) {
   const lastUserMessage = getLastUserMessage(messages);
   const intros = {
     negative: "That sounds really painful, and it makes sense to feel hurt.",
@@ -90,12 +292,23 @@ function buildFallbackReply(messages, analysis) {
     unknown: "Thanks for sharing how you're feeling.",
   };
 
-  const intro = intros[analysis.mentalState] || intros.unknown;
+  const intro = intros[sentimentAnalysis.mentalState] || intros.unknown;
   const reflection = lastUserMessage
     ? `You said: "${lastUserMessage.slice(0, 160)}".`
     : "";
+  const analysisSummary = buildAnalysisSummary(
+    sentimentAnalysis,
+    emotionAnalysis,
+    indexes
+  );
+  const supportFocus =
+    indexes.riskIndex >= 70
+      ? "This looks like a high-risk mental health signal. Please reach out to a trusted person or emergency support right away if you feel unsafe."
+      : indexes.supportNeedIndex >= 55
+      ? "This looks like a meaningful support-need signal. A grounded next step would be to tell one trusted person what happened today."
+      : "This looks like a manageable but important emotional strain. We can slow it down and look at one trigger and one coping step.";
 
-  return `${intro} ${reflection} If you want, we can unpack this step by step: what happened, what hurt most, and what support would help tonight.`.trim();
+  return `${analysisSummary}\n\nSupportive Reply: ${intro} ${reflection} ${supportFocus}`.trim();
 }
 
 async function callHuggingFace(messages) {
@@ -103,14 +316,29 @@ async function callHuggingFace(messages) {
     throw new Error("HF_API_TOKEN environment variable is not configured");
   }
 
-  const inputText = (messages || [])
-    .map((m) => `${m.role || "user"}: ${m.content}`)
-    .join("\n");
+  const inputText = buildClassifierInput(messages);
 
-  return hfClient.textClassification({
-    model: HF_MODEL_ID,
-    inputs: inputText,
-  });
+  try {
+    return await hfClient.textClassification({
+      model: HF_MODEL_ID,
+      inputs: inputText,
+    });
+  } catch (err) {
+    const message = err?.message || String(err);
+    const isLengthError =
+      message.includes("expanded size of the tensor") ||
+      message.includes("must match the existing size");
+
+    if (!isLengthError) {
+      throw err;
+    }
+
+    const reducedInput = inputText.slice(-512);
+    return hfClient.textClassification({
+      model: HF_MODEL_ID,
+      inputs: reducedInput,
+    });
+  }
 }
 
 async function tryChatCompletion(models, systemInstruction, safeMessages) {
@@ -177,7 +405,18 @@ async function tryTextGeneration(models, prompt) {
   return null;
 }
 
-async function generateReply(messages, analysis) {
+function formatReplyWithAnalysis(modelText, sentimentAnalysis, emotionAnalysis, indexes) {
+  const analysisSummary = buildAnalysisSummary(
+    sentimentAnalysis,
+    emotionAnalysis,
+    indexes
+  );
+  const cleanedText = (modelText || "").trim();
+
+  return `${analysisSummary}\n\nMental Health Interpretation: ${cleanedText}`.trim();
+}
+
+async function generateReply(messages, sentimentAnalysis, emotionAnalysis, indexes) {
   if (!HF_API_TOKEN) {
     throw new Error("HF_API_TOKEN environment variable is not configured");
   }
@@ -187,9 +426,12 @@ async function generateReply(messages, analysis) {
     content: m.content || "",
   }));
 
-  const systemInstruction = `You are a kind, supportive mental health assistant. Sentiment signal: ${analysis.mentalState} (${analysis.confidence.toFixed(
-    2
-  )}). Be natural, specific to the user's latest message, and avoid repetitive wording.`;
+  const analysisSummary = buildAnalysisSummary(
+    sentimentAnalysis,
+    emotionAnalysis,
+    indexes
+  );
+  const systemInstruction = `You are a mental health analysis assistant. Stay focused on emotional interpretation, coping relevance, and support guidance. Use this analysis exactly as context:\n${analysisSummary}\nRespond in two parts only: "Mental Health Interpretation:" and "Supportive Reply:". Keep the tone empathetic, avoid generic chatbot language, and stay specific to the latest user message.`;
 
   const chatResult = await tryChatCompletion(
     CHAT_MODEL_CANDIDATES,
@@ -214,13 +456,27 @@ Respond with one empathetic paragraph plus one practical next step.`.trim();
   const previousAssistantMessage = getLastAssistantMessage(messages);
 
   if (textResult?.text) {
-    return avoidExactRepeat(textResult.text, previousAssistantMessage);
+    return {
+      text: avoidExactRepeat(
+        formatReplyWithAnalysis(
+          textResult.text,
+          sentimentAnalysis,
+          emotionAnalysis,
+          indexes
+        ),
+        previousAssistantMessage
+      ),
+      source: textResult.source,
+    };
   }
 
-  return avoidExactRepeat(
-    buildFallbackReply(messages, analysis),
-    previousAssistantMessage
-  );
+  return {
+    text: avoidExactRepeat(
+      buildFallbackReply(messages, sentimentAnalysis, emotionAnalysis, indexes),
+      previousAssistantMessage
+    ),
+    source: "fallback:mental-health-analysis",
+  };
 }
 
 function mapToAnalysis(modelOutput) {
@@ -259,7 +515,22 @@ async function analyzeChat(payload) {
 
   const modelOutput = await callHuggingFace(messages);
   const analysis = mapToAnalysis(modelOutput);
-  const aiResponseText = await generateReply(messages, analysis);
+  const emotionAnalysis = deriveEmotionAnalysis(messages, analysis);
+  const indexes = deriveIndexes(messages, analysis, emotionAnalysis);
+  const generatedReply = await generateReply(
+    messages,
+    analysis,
+    emotionAnalysis,
+    indexes
+  );
+  const aiResponseText = generatedReply.text;
+  const conversationMessages = [
+    ...messages,
+    {
+      role: "assistant",
+      content: aiResponseText,
+    },
+  ];
 
   const chatAnalysis = await ChatAnalysis.findOneAndUpdate(
     { sessionId: String(sessionId) },
@@ -267,10 +538,13 @@ async function analyzeChat(payload) {
       $set: {
         userId: userId ? String(userId) : undefined,
         userDetails: userDetails || {},
-        messages,
+        messages: conversationMessages,
         aiResponse: aiResponseText,
         mentalState: analysis.mentalState,
         confidence: analysis.confidence,
+        emotionAnalysis,
+        indexes,
+        generationSource: generatedReply.source,
         rawModelOutput: analysis.rawModelOutput,
       },
     },
@@ -281,6 +555,9 @@ async function analyzeChat(payload) {
     sessionId: chatAnalysis.sessionId,
     aiResponse: aiResponseText,
     analysis,
+    emotionAnalysis,
+    indexes,
+    generationSource: generatedReply.source,
   };
 }
 
