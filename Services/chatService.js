@@ -169,7 +169,7 @@ function avoidExactRepeat(candidate, previousAssistantMessage) {
   return candidate;
 }
 
-function scoreEmotionFromText(text, keywords, baseScore = 0.06, perHit = 0.18) {
+function scoreEmotionFromText(text, keywords, baseScore = 0, perHit = 0.18) {
   const lowerText = text.toLowerCase();
   const hits = keywords.reduce((count, keyword) => {
     return count + (lowerText.includes(keyword) ? 1 : 0);
@@ -182,26 +182,43 @@ function deriveEmotionAnalysis(messages, sentimentAnalysis) {
   const text = getUserText(messages);
   const primarySentiment = sentimentAnalysis.mentalState;
   const sentimentConfidence = sentimentAnalysis.confidence || 0;
+  const positiveEmotions = ["relief", "hope"];
+  const negativeEmotions = [
+    "sadness",
+    "anxiety",
+    "anger",
+    "hopelessness",
+    "guilt",
+    "overwhelm",
+  ];
 
   const emotionScores = Object.entries(EMOTION_KEYWORDS).map(([emotion, keywords]) => {
     let score = scoreEmotionFromText(text, keywords);
 
     if (
       primarySentiment === "negative" &&
-      ["sadness", "anxiety", "anger", "hopelessness", "guilt", "overwhelm"].includes(emotion)
+      negativeEmotions.includes(emotion)
     ) {
-      score = clamp(score + sentimentConfidence * 0.18, 0, 1);
+      score = clamp(score + sentimentConfidence * 0.22, 0, 1);
     }
 
     if (
       primarySentiment === "positive" &&
-      ["relief", "hope"].includes(emotion)
+      positiveEmotions.includes(emotion)
     ) {
-      score = clamp(score + sentimentConfidence * 0.2, 0, 1);
+      score = clamp(score + sentimentConfidence * 0.3, 0, 1);
     }
 
     if (primarySentiment === "neutral" && emotion === "overwhelm") {
       score = clamp(score * 0.8, 0, 1);
+    }
+
+    if (primarySentiment === "positive" && negativeEmotions.includes(emotion)) {
+      score = clamp(score * 0.35, 0, 1);
+    }
+
+    if (primarySentiment === "negative" && positiveEmotions.includes(emotion)) {
+      score = clamp(score * 0.45, 0, 1);
     }
 
     return {
@@ -210,12 +227,26 @@ function deriveEmotionAnalysis(messages, sentimentAnalysis) {
     };
   });
 
+  if (primarySentiment === "positive" && emotionScores.every((entry) => entry.score < 20)) {
+    emotionScores.forEach((entry) => {
+      if (entry.emotion === "hope") entry.score = roundScore(0.55 + sentimentConfidence * 0.2);
+      if (entry.emotion === "relief") entry.score = roundScore(0.45 + sentimentConfidence * 0.2);
+    });
+  }
+
+  if (primarySentiment === "negative" && emotionScores.every((entry) => entry.score < 20)) {
+    emotionScores.forEach((entry) => {
+      if (entry.emotion === "sadness") entry.score = roundScore(0.45 + sentimentConfidence * 0.2);
+      if (entry.emotion === "anxiety") entry.score = roundScore(0.35 + sentimentConfidence * 0.18);
+    });
+  }
+
   emotionScores.sort((a, b) => b.score - a.score);
-  const dominantEmotion = emotionScores[0]?.emotion || "unclear";
+  const dominantEmotion = emotionScores[0]?.score >= 20 ? emotionScores[0].emotion : "unclear";
 
   return {
     dominantEmotion,
-    emotions: emotionScores.filter((entry) => entry.score >= 8).slice(0, 4),
+    emotions: emotionScores.filter((entry) => entry.score >= 12).slice(0, 4),
   };
 }
 
